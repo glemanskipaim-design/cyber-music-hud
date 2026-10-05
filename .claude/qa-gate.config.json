@@ -1,0 +1,7 @@
+{
+  "test_cmd": ".\build.bat test",
+  "lint_cmd": null,
+  "require_hattori": true,
+  "require_yagyu_always": true,
+  "_comment": "Lint fica a cargo do compilador (/W4 /WX no build.bat). yagyu sempre: o app captura audio de outros processos e grava em HKCU Run."
+}
