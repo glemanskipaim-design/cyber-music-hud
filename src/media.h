@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <cstdint>
 #include <vector>
 
 #include "logic.h"
@@ -25,6 +26,9 @@ struct Track {
   std::wstring platformLabel;  // "SPOTIFY", "YOUTUBE", "CHROME"...
   Platform platform = Platform::Browser;
   DWORD audioPid = 0;          // raiz da árvore do player, 0 se não achou
+  // Capa kArtPixels x kArtPixels, BGRA pré-multiplicado já tingida de ciano;
+  // vazia se o player não fornece ou não deu para decodificar.
+  std::vector<uint8_t> art;
 };
 
 class MediaWatcher {

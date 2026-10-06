@@ -16,13 +16,19 @@ constexpr UINT_PTR kFrameTimer = 1;
 constexpr UINT kFrameMs = 33;
 
 // Medidas em DIP (escaladas pelo DPI do monitor).
-constexpr float kWidth = 360.0f;
+constexpr float kWidth = 360.0f;      // sem capa
+constexpr float kArtSize = 44.0f;
+constexpr float kArtGap = 12.0f;      // entre capa e ▶
+constexpr float kArtTop = 14.0f;
+constexpr float kArtExtraWidth = 30.0f;  // o painel alarga para o texto não perder espaço
+constexpr float kPlayToText = 20.0f;
+constexpr float kPlayIconNudge = 1.0f;  // ▶ é triângulo: 1 DIP à direita compensa opticamente
+constexpr double kArtRevealMs = 380;  // varredura de cima para baixo ao aparecer
 constexpr float kHeight = 112.0f;
 constexpr float kMargin = 20.0f;      // distância da borda da área de trabalho
 constexpr float kSlideDip = 14.0f;    // quanto o painel sobe ao aparecer
 constexpr float kPadX = 18.0f;
 constexpr float kRadius = 6.0f;
-constexpr float kTextX = 38.0f;       // título/artista alinhados depois do ▶
 constexpr float kTitleY = 15.0f;
 constexpr float kArtistY = 37.0f;
 constexpr float kBarsTop = 64.0f;
@@ -45,14 +51,14 @@ constexpr double kDecodeFrameMs = 45;  // troca de glifos ~22x/s, não a cada fr
 
 // Paleta da família "cyber" (mesma do Cyber Process Switcher): preto azulado
 // translúcido, ciano como destaque único e um traço magenta mínimo.
-constexpr D2D1_COLOR_F kPanel = {0.016f, 0.022f, 0.034f, 0.95f};
+constexpr D2D1_COLOR_F kPanel = {kPaletteBase.r, kPaletteBase.g, kPaletteBase.b, 0.95f};
 constexpr D2D1_COLOR_F kBorder = {0.0f, 0.898f, 1.0f, 0.16f};
-constexpr D2D1_COLOR_F kAccent = {0.0f, 0.898f, 1.0f, 1.0f};
+constexpr D2D1_COLOR_F kAccent = {kPaletteCyan.r, kPaletteCyan.g, kPaletteCyan.b, 1.0f};
 constexpr D2D1_COLOR_F kMagenta = {1.0f, 0.165f, 0.427f, 0.80f};
 constexpr D2D1_COLOR_F kTitle = {0.93f, 0.96f, 0.98f, 0.96f};
 constexpr D2D1_COLOR_F kArtist = {0.62f, 0.69f, 0.75f, 0.78f};
 constexpr D2D1_COLOR_F kTag = {0.0f, 0.898f, 1.0f, 0.55f};
-constexpr D2D1_COLOR_F kBarHot = {0.78f, 0.98f, 1.0f, 1.0f};
+constexpr D2D1_COLOR_F kBarHot = {kPaletteHot.r, kPaletteHot.g, kPaletteHot.b, 1.0f};
 constexpr D2D1_COLOR_F kBaseline = {0.0f, 0.898f, 1.0f, 0.12f};
 
 const wchar_t* PickMonoFont(IDWriteFactory* factory) {
@@ -240,12 +246,15 @@ void Hud::PlaceOnPrimaryMonitor() {
   dpi_ = static_cast<float>(dpiX);
   MONITORINFO mi = {sizeof(mi)};
   GetMonitorInfoW(monitor, &mi);
+  const SIZE size = PixelSize();
+  const int margin = static_cast<int>(std::lround(kMargin * dpi_ / 96.0f));
+  anchor_.x = mi.rcWork.right - margin - size.cx;
+  anchor_.y = mi.rcWork.bottom - margin - size.cy;
+}
+
+SIZE Hud::PixelSize() const {
   const float scale = dpi_ / 96.0f;
-  const int width = static_cast<int>(std::ceil(kWidth * scale));
-  const int height = static_cast<int>(std::ceil(kHeight * scale));
-  const int margin = static_cast<int>(std::lround(kMargin * scale));
-  anchor_.x = mi.rcWork.right - margin - width;
-  anchor_.y = mi.rcWork.bottom - margin - height;
+  return {static_cast<LONG>(std::ceil(width_ * scale)), static_cast<LONG>(std::ceil(kHeight * scale))};
 }
 
 void Hud::Show(const Track& track) {
@@ -253,7 +262,16 @@ void Hud::Show(const Track& track) {
   track_ = track;
   shownTitle_.clear();
   shownArtist_.clear();
-  tag_ = MakeLayout(track.platformLabel, tagFormat_.Get(), kWidth, kTagTracking);
+  title_.Reset();
+  artist_.Reset();
+  art_.Reset();
+  const bool hasArt = track.art.size() == kArtBytes;
+  if (!hasArt) track_.art.clear();
+  width_ = kWidth + (hasArt ? kArtExtraWidth : 0.0f);
+  const float contentX = kPadX + (hasArt ? kArtSize + kArtGap : 0.0f);
+  playX_ = contentX + kPlayIconNudge;
+  textX_ = contentX + kPlayToText;
+  tag_ = MakeLayout(track.platformLabel, tagFormat_.Get(), width_, kTagTracking);
   tagWidth_ = 0;
   if (tag_) {
     DWRITE_TEXT_METRICS m = {};
@@ -318,38 +336,47 @@ void Hud::UpdateText(double ms) {
   const std::wstring artist =
       DecodeText(track_.artist, DecodeProgress(ms, kArtistDecodeStart, kArtistDecodeMs), glyphFrame);
   if (title != shownTitle_ || !title_) {
-    const float maxWidth = kWidth - kTextX - kPadX - (tagWidth_ > 0 ? tagWidth_ + kTagGap : 0.0f);
+    const float maxWidth = width_ - textX_ - kPadX - (tagWidth_ > 0 ? tagWidth_ + kTagGap : 0.0f);
     title_ = MakeLayout(title, titleFormat_.Get(), maxWidth, kTitleTracking);
     shownTitle_ = title;
   }
   if (artist != shownArtist_ || !artist_) {
-    artist_ = MakeLayout(artist, artistFormat_.Get(), kWidth - kTextX - kPadX, 0.0f);
+    artist_ = MakeLayout(artist, artistFormat_.Get(), width_ - textX_ - kPadX, 0.0f);
     shownArtist_ = artist;
   }
 }
 
 void Hud::Render(double ms) {
-  const float scale = dpi_ / 96.0f;
-  const int width = static_cast<int>(std::ceil(kWidth * scale));
-  const int height = static_cast<int>(std::ceil(kHeight * scale));
-  if (!EnsureSurface(width, height) || !EnsureRenderTarget()) return;
+  const SIZE size = PixelSize();
+  if (!EnsureSurface(size.cx, size.cy) || !EnsureRenderTarget()) return;
 
-  const RECT bounds = {0, 0, width, height};
+  const RECT bounds = {0, 0, size.cx, size.cy};
   if (FAILED(target_->BindDC(memDc_, &bounds))) return;
   target_->SetDpi(dpi_, dpi_);
+  if (!art_ && !track_.art.empty()) {
+    const D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+    // Se falhar, desiste desta capa (fica só a moldura) em vez de tentar a cada quadro.
+    if (FAILED(target_->CreateBitmap(D2D1::SizeU(kArtPixels, kArtPixels), track_.art.data(), kArtStride, props,
+                                     &art_))) {
+      track_.art.clear();
+    }
+  }
   target_->BeginDraw();
   target_->Clear(D2D1::ColorF(0, 0, 0, 0));
   DrawFrame(target_.Get(), brush_.Get());
+  DrawArt(target_.Get(), brush_.Get(), ms);
   DrawHeader(target_.Get(), brush_.Get());
   DrawBars(target_.Get(), brush_.Get(), ms);
   if (target_->EndDraw() == D2DERR_RECREATE_TARGET) {
+    art_.Reset();  // recursos do alvo antigo
     brush_.Reset();
     target_.Reset();
   }
 }
 
 void Hud::DrawFrame(ID2D1RenderTarget* rt, ID2D1SolidColorBrush* brush) {
-  const D2D1_ROUNDED_RECT panel = {D2D1::RectF(0.5f, 0.5f, kWidth - 0.5f, kHeight - 0.5f), kRadius, kRadius};
+  const D2D1_ROUNDED_RECT panel = {D2D1::RectF(0.5f, 0.5f, width_ - 0.5f, kHeight - 0.5f), kRadius, kRadius};
   brush->SetColor(kPanel);
   rt->FillRoundedRectangle(panel, brush);
   brush->SetColor(kBorder);
@@ -360,15 +387,15 @@ void Hud::DrawFrame(ID2D1RenderTarget* rt, ID2D1SolidColorBrush* brush) {
   const float s = 1.4f, i = 4.0f;  // espessura, recuo da borda
   rt->FillRectangle(D2D1::RectF(i, i, i + kBracket, i + s), brush);
   rt->FillRectangle(D2D1::RectF(i, i, i + s, i + kBracket), brush);
-  rt->FillRectangle(D2D1::RectF(kWidth - i - kBracket, kHeight - i - s, kWidth - i, kHeight - i), brush);
-  rt->FillRectangle(D2D1::RectF(kWidth - i - s, kHeight - i - kBracket, kWidth - i, kHeight - i), brush);
+  rt->FillRectangle(D2D1::RectF(width_ - i - kBracket, kHeight - i - s, width_ - i, kHeight - i), brush);
+  rt->FillRectangle(D2D1::RectF(width_ - i - s, kHeight - i - kBracket, width_ - i, kHeight - i), brush);
   brush->SetColor(kMagenta);
-  rt->FillRectangle(D2D1::RectF(kWidth - i - 12.0f, i, kWidth - i, i + s), brush);
+  rt->FillRectangle(D2D1::RectF(width_ - i - 12.0f, i, width_ - i, i + s), brush);
 }
 
 void Hud::DrawHeader(ID2D1RenderTarget* rt, ID2D1SolidColorBrush* brush) {
   // ▶ alinhado ao meio da linha do título.
-  rt->SetTransform(D2D1::Matrix3x2F::Translation(kPadX + 1.0f, kTitleY + 4.5f));
+  rt->SetTransform(D2D1::Matrix3x2F::Translation(playX_, kTitleY + 4.5f));
   // Pulsa com o grave: a mesma música que mexe as barras mexe o ícone.
   brush->SetColor(WithAlpha(kAccent, 0.55f + 0.45f * std::min(1.0f, spectrum_.Bass() * 1.3f)));
   rt->FillGeometry(playIcon_.Get(), brush);
@@ -376,17 +403,37 @@ void Hud::DrawHeader(ID2D1RenderTarget* rt, ID2D1SolidColorBrush* brush) {
 
   if (title_) {
     brush->SetColor(kTitle);
-    rt->DrawTextLayout(D2D1::Point2F(kTextX, kTitleY), title_.Get(), brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+    rt->DrawTextLayout(D2D1::Point2F(textX_, kTitleY), title_.Get(), brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
   }
   if (artist_) {
     brush->SetColor(kArtist);
-    rt->DrawTextLayout(D2D1::Point2F(kTextX, kArtistY), artist_.Get(), brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+    rt->DrawTextLayout(D2D1::Point2F(textX_, kArtistY), artist_.Get(), brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
   }
   if (tag_) {
     // Etiqueta menor que o título: desce para dividir a linha de base.
     brush->SetColor(kTag);
-    rt->DrawTextLayout(D2D1::Point2F(kWidth - kPadX - tagWidth_, kTitleY + 4.0f), tag_.Get(), brush);
+    rt->DrawTextLayout(D2D1::Point2F(width_ - kPadX - tagWidth_, kTitleY + 4.0f), tag_.Get(), brush);
   }
+}
+
+// Capa revelada de cima para baixo por uma linha de varredura, no mesmo
+// compasso da "decodificação" do texto.
+void Hud::DrawArt(ID2D1RenderTarget* rt, ID2D1SolidColorBrush* brush, double ms) {
+  if (track_.art.empty()) return;
+  const D2D1_RECT_F box = D2D1::RectF(kPadX, kArtTop, kPadX + kArtSize, kArtTop + kArtSize);
+  const float reveal = static_cast<float>(EaseOutCubic(ms / kArtRevealMs));
+  const float scanY = box.top + kArtSize * reveal;
+  if (art_ && reveal > 0.0f) {
+    rt->PushAxisAlignedClip(D2D1::RectF(box.left, box.top, box.right, scanY), D2D1_ANTIALIAS_MODE_ALIASED);
+    rt->DrawBitmap(art_.Get(), box, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+    rt->PopAxisAlignedClip();
+  }
+  if (reveal < 1.0f) {
+    brush->SetColor(WithAlpha(kBarHot, 0.85f));
+    rt->FillRectangle(D2D1::RectF(box.left, scanY - 1.0f, box.right, scanY), brush);
+  }
+  brush->SetColor(kBorder);
+  rt->DrawRectangle(D2D1::RectF(box.left - 0.5f, box.top - 0.5f, box.right + 0.5f, box.bottom + 0.5f), brush, 1.0f);
 }
 
 void Hud::DrawBars(ID2D1RenderTarget* rt, ID2D1SolidColorBrush* brush, double ms) {
@@ -394,7 +441,7 @@ void Hud::DrawBars(ID2D1RenderTarget* rt, ID2D1SolidColorBrush* brush, double ms
   const std::vector<float>& peaks = spectrum_.Peaks();
   const int n = spectrum_.Bands();
   const float left = kPadX;
-  const float right = kWidth - kPadX;
+  const float right = width_ - kPadX;
   const float slot = (right - left + kBarGap) / static_cast<float>(n);
   const float barWidth = slot - kBarGap;
   const float span = kBarsBottom - kBarsTop;
@@ -420,7 +467,7 @@ void Hud::DrawBars(ID2D1RenderTarget* rt, ID2D1SolidColorBrush* brush, double ms
   const float remaining = static_cast<float>(HudRemaining(timeline_, ms));
   brush->SetColor(WithAlpha(kAccent, 0.35f));
   const float lineLeft = kRadius + 2.0f;
-  const float lineRight = lineLeft + (kWidth - 2.0f * lineLeft) * remaining;
+  const float lineRight = lineLeft + (width_ - 2.0f * lineLeft) * remaining;
   rt->FillRectangle(D2D1::RectF(lineLeft, kHeight - 2.5f, lineRight, kHeight - 1.5f), brush);
 }
 

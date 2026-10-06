@@ -21,6 +21,7 @@ com fade depois de ~5,6 s.
 | Plataforma | AUMID da sessão (`Spotify.exe`, `Chrome`…) + título das janelas do navegador | Navegador não expõe a URL; `"<vídeo> - YouTube - Google Chrome"` é o sinal local confiável. Se não der para confirmar YouTube, mostra o navegador (`CHROME`) |
 | Áudio | **WASAPI loopback por processo** (Win10 2004+), na árvore de processos do player | Barras reagem só à música — notificação e outros apps não mexem nelas. Cai para loopback do sistema se não der |
 | Espectro | FFT 2048 + 36 bandas log (45 Hz–15 kHz), dB com referência adaptativa | Barras usam a altura toda com volume alto ou baixo; silêncio = chão |
+| Capa | Miniatura do GSMTC decodificada com WIC, quadrado central, 96 px, tingida de ciano com scanlines | Mantém o visual monocromático; miniatura 16:9 do YouTube vira quadrado |
 | Visual | Direct2D/DirectWrite em janela em camadas, `WS_EX_NOACTIVATE \| WS_EX_TRANSPARENT` | Não rouba foco nem clique; translúcido de verdade |
 
 Regras de exibição:
@@ -31,8 +32,8 @@ Regras de exibição:
   vídeo solto de outros sites);
 - não aparece por cima de jogo/vídeo em tela cheia ou apresentação.
 
-Consumo medido (i5-13420H): **0 % de CPU** ocioso (só uma consulta GSMTC a
-cada 400 ms, sem timer de desenho nem captura), ~3 % de um núcleo enquanto o
+Consumo medido (i5-13420H, com outros apps rodando): **0 % de CPU** ocioso (só uma consulta GSMTC a
+cada 400 ms, sem timer de desenho nem captura), ~3–10 % de um núcleo (varia com a carga da máquina) enquanto o
 HUD está na tela (~32 fps), ~42 MB de memória privada.
 
 ## Uso

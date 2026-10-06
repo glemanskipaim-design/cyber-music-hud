@@ -12,6 +12,7 @@
 #include <winrt/Windows.Media.Core.h>
 #include <winrt/Windows.Media.Playback.h>
 #include <winrt/Windows.Media.h>
+#include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.Storage.h>
 #include <algorithm>
 #include <cmath>
@@ -70,13 +71,42 @@ std::wstring WriteWav(const std::wstring& path, const std::vector<int16_t>& pcm)
   return path;
 }
 
-MediaPlaybackItem MakeItem(const std::wstring& wav, const wchar_t* title, const wchar_t* artist) {
+// Capa sintética 320x180 (16:9, como miniatura de vídeo): anéis sobre um
+// degradê, para conferir corte quadrado central e o tingimento.
+std::wstring WriteCover(const std::wstring& path, int seed) {
+  constexpr int kW = 320, kH = 180;
+  FILE* f = nullptr;
+  if (_wfopen_s(&f, path.c_str(), L"wb") || !f) return {};
+  const uint32_t data = kW * kH * 4;
+  auto u32 = [&](uint32_t v) { fwrite(&v, 4, 1, f); };
+  auto u16 = [&](uint16_t v) { fwrite(&v, 2, 1, f); };
+  fwrite("BM", 1, 2, f); u32(54 + data); u32(0); u32(54);
+  u32(40); u32(kW); u32(static_cast<uint32_t>(-kH)); u16(1); u16(32); u32(0); u32(data);
+  u32(2835); u32(2835); u32(0); u32(0);
+  for (int y = 0; y < kH; ++y) {
+    for (int x = 0; x < kW; ++x) {
+      const double dx = x - kW / 2.0, dy = y - kH / 2.0;
+      const double ring = 0.5 + 0.5 * std::sin(std::sqrt(dx * dx + dy * dy) / (6.0 + seed * 3));
+      const double grad = static_cast<double>(y) / kH;
+      const uint8_t px[4] = {static_cast<uint8_t>(255 * ring * (1 - grad)), static_cast<uint8_t>(120 * grad),
+                             static_cast<uint8_t>(255 * ring * grad), 255};
+      fwrite(px, 1, 4, f);
+    }
+  }
+  fclose(f);
+  return path;
+}
+
+MediaPlaybackItem MakeItem(const std::wstring& wav, const std::wstring& cover, const wchar_t* title,
+                           const wchar_t* artist) {
   auto file = Windows::Storage::StorageFile::GetFileFromPathAsync(wav).get();
   MediaPlaybackItem item(MediaSource::CreateFromStorageFile(file));
   auto props = item.GetDisplayProperties();
   props.Type(MediaPlaybackType::Music);
   props.MusicProperties().Title(title);
   props.MusicProperties().Artist(artist);
+  props.Thumbnail(Windows::Storage::Streams::RandomAccessStreamReference::CreateFromFile(
+      Windows::Storage::StorageFile::GetFileFromPathAsync(cover).get()));
   item.ApplyDisplayProperties(props);
   return item;
 }
@@ -91,11 +121,13 @@ int wmain(int argc, wchar_t** argv) {
   GetTempPathW(MAX_PATH, temp);
   const std::wstring a = WriteWav(std::wstring(temp) + L"cmh-fake-1.wav", Synth(seconds, 82.4, 118));
   const std::wstring b = WriteWav(std::wstring(temp) + L"cmh-fake-2.wav", Synth(seconds, 110.0, 96));
-  if (a.empty() || b.empty()) return 1;
+  const std::wstring coverA = WriteCover(std::wstring(temp) + L"cmh-fake-1.bmp", 1);
+  const std::wstring coverB = WriteCover(std::wstring(temp) + L"cmh-fake-2.bmp", 3);
+  if (a.empty() || b.empty() || coverA.empty() || coverB.empty()) return 1;
 
   MediaPlaybackList list;
-  list.Items().Append(MakeItem(a, L"Tank!", L"Seatbelts"));
-  list.Items().Append(MakeItem(b, L"Rush", L"Seatbelts"));
+  list.Items().Append(MakeItem(a, coverA, L"Tank!", L"Seatbelts"));
+  list.Items().Append(MakeItem(b, coverB, L"Rush", L"Seatbelts"));
   MediaPlayer player;
   player.Source(list);
   player.Play();

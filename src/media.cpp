@@ -1,8 +1,14 @@
-#include "media.h"
+﻿#include "media.h"
 
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Media.Control.h>
+#include <winrt/Windows.Storage.Streams.h>
+
+#include <wincodec.h>
+#include <wrl/client.h>
+
+#include <chrono>
 
 #include "procutil.h"
 
@@ -15,12 +21,104 @@ using winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionP
 
 constexpr DWORD kPollMs = 400;
 constexpr DWORD kRetryMs = 5000;  // GSMTC indisponível: tenta de novo sem martelar
+constexpr std::chrono::milliseconds kArtTimeout{1500};  // provedor da capa travado não segura a thread
 
 struct Playing {
   Track track;
   Source source;
   std::wstring sourceId;
+  winrt::Windows::Storage::Streams::IRandomAccessStreamReference thumbnail{nullptr};
 };
+
+template <typename Async>
+bool Finished(const Async& op) {
+  if (op.wait_for(kArtTimeout) == winrt::Windows::Foundation::AsyncStatus::Completed) return true;
+  op.Cancel();
+  return false;
+}
+
+// Copia a imagem para a memória, com prazo e limite de tamanho próprios: o
+// provedor (outro app) pode travar ou mentir em Size().
+std::vector<uint8_t> ReadAllBounded(const winrt::Windows::Storage::Streams::IRandomAccessStreamReference& ref) {
+  using namespace winrt::Windows::Storage::Streams;
+  const auto open = ref.OpenReadAsync();
+  if (!Finished(open)) return {};
+  const auto stream = open.GetResults();
+  std::vector<uint8_t> out;
+  Buffer chunk(64 * 1024);
+  while (true) {
+    const auto read = stream.ReadAsync(chunk, chunk.Capacity(), InputStreamOptions::None);
+    if (!Finished(read)) return {};
+    const IBuffer got = read.GetResults();
+    if (got.Length() == 0) return out;
+    if (out.size() + got.Length() > kMaxArtFileBytes) return {};
+    out.insert(out.end(), got.data(), got.data() + got.Length());
+  }
+}
+
+const GUID* ContainerFor(ImageFormat format) {
+  switch (format) {
+    case ImageFormat::Png: return &GUID_ContainerFormatPng;
+    case ImageFormat::Jpeg: return &GUID_ContainerFormatJpeg;
+    case ImageFormat::Gif: return &GUID_ContainerFormatGif;
+    case ImageFormat::Bmp: return &GUID_ContainerFormatBmp;
+    case ImageFormat::Unknown: break;
+  }
+  return nullptr;
+}
+
+// Decodifica a capa (PNG/JPEG/GIF/BMP), corta o quadrado central —
+// miniatura de vídeo do YouTube é 16:9 —, reduz para kArtPixels e tinge.
+// Vazio em qualquer falha: o HUD só deixa de mostrar a capa.
+std::vector<uint8_t> LoadArt(const winrt::Windows::Storage::Streams::IRandomAccessStreamReference& ref) {
+  using Microsoft::WRL::ComPtr;
+  if (!ref) return {};
+  try {
+    const std::vector<uint8_t> bytes = ReadAllBounded(ref);
+    const GUID* container = ContainerFor(SniffImage(bytes.data(), bytes.size()));
+    if (!container) return {};
+
+    ComPtr<IWICImagingFactory> wic;
+    ComPtr<IWICStream> source;
+    ComPtr<IWICBitmapDecoder> decoder;
+    ComPtr<IWICBitmapFrameDecode> frame;
+    // Decoder escolhido pelo formato e restrito aos codecs nativos: dado não
+    // confiável nunca chega a um codec de terceiro (HEIF, RAW...).
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) ||
+        FAILED(wic->CreateStream(&source)) ||
+        FAILED(source->InitializeFromMemory(const_cast<BYTE*>(bytes.data()), static_cast<DWORD>(bytes.size()))) ||
+        FAILED(wic->CreateDecoder(*container, &GUID_VendorMicrosoftBuiltIn, &decoder)) ||
+        FAILED(decoder->Initialize(source.Get(), WICDecodeMetadataCacheOnDemand)) ||
+        FAILED(decoder->GetFrame(0, &frame))) {
+      return {};
+    }
+    UINT w = 0, h = 0;
+    if (FAILED(frame->GetSize(&w, &h)) || w == 0 || h == 0 || w > kMaxArtSide || h > kMaxArtSide) return {};
+    const UINT side = std::min(w, h);
+    const WICRect square = {static_cast<INT>((w - side) / 2), static_cast<INT>((h - side) / 2),
+                            static_cast<INT>(side), static_cast<INT>(side)};
+
+    ComPtr<IWICBitmapClipper> clipper;
+    ComPtr<IWICBitmapScaler> scaler;
+    ComPtr<IWICFormatConverter> converter;
+    if (FAILED(wic->CreateBitmapClipper(&clipper)) || FAILED(clipper->Initialize(frame.Get(), &square)) ||
+        FAILED(wic->CreateBitmapScaler(&scaler)) ||
+        FAILED(scaler->Initialize(clipper.Get(), kArtPixels, kArtPixels, WICBitmapInterpolationModeFant)) ||
+        FAILED(wic->CreateFormatConverter(&converter)) ||
+        FAILED(converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr,
+                                     0.0, WICBitmapPaletteTypeCustom))) {
+      return {};
+    }
+    std::vector<uint8_t> pixels(kArtBytes);
+    if (FAILED(converter->CopyPixels(nullptr, kArtStride, static_cast<UINT>(pixels.size()), pixels.data()))) {
+      return {};
+    }
+    TintArt(pixels, kArtPixels);
+    return pixels;
+  } catch (const winrt::hresult_error&) {
+    return {};
+  }
+}
 
 std::optional<Playing> ReadSession(const GlobalSystemMediaTransportControlsSession& session) {
   Playing p;
@@ -39,6 +137,7 @@ std::optional<Playing> ReadSession(const GlobalSystemMediaTransportControlsSessi
   p.track.artist = ClampText(props.Artist().c_str());
   if (p.track.title.empty()) return std::nullopt;
   p.track.platform = p.source.platform;
+  p.thumbnail = props.Thumbnail();
   return p;
 }
 
@@ -104,6 +203,8 @@ void MediaWatcher::Run() {
     GlobalSystemMediaTransportControlsSessionManager manager{nullptr};
     ChangeDetector detector;
     std::wstring resolvedKey;
+    std::wstring artKey;  // capa da última faixa anunciada, reaplicada ao retomar
+    std::vector<uint8_t> art;
     DWORD wait = 0;  // primeira consulta imediata: anuncia o que já está tocando
     while (WaitForSingleObject(stopEvent_, wait) == WAIT_TIMEOUT) {
       wait = kPollMs;
@@ -127,9 +228,16 @@ void MediaWatcher::Run() {
       if (key == resolvedKey && !announce) continue;
       resolvedKey = key;
       if (playing) ResolveTrackSource(playing->track, playing->source);
+      const bool show = announce && WorthAnnouncing(playing->track.platform, playing->track.artist);
+      // A capa entra junto com o anúncio: "Mostrar agora" também a reaproveita.
+      if (show) {
+        art = LoadArt(playing->thumbnail);
+        artKey = key;
+      }
+      if (playing && key == artKey) playing->track.art = art;
       std::lock_guard lock(mutex_);
       current_ = playing ? std::optional<Track>(playing->track) : std::nullopt;
-      if (announce && WorthAnnouncing(playing->track.platform, playing->track.artist)) {
+      if (show) {
         announced_ = playing->track;
         if (notify_) PostMessageW(notify_, message_, 0, 0);
       }

@@ -18,7 +18,7 @@ call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>nul || exit /b 1
 
 if not exist build mkdir build
 set "CFLAGS=/nologo /std:c++20 /O2 /MT /W4 /WX /EHsc /utf-8 /permissive- /DUNICODE /D_UNICODE /DNOMINMAX /DWIN32_LEAN_AND_MEAN"
-set "LIBS=user32.lib gdi32.lib shell32.lib advapi32.lib ole32.lib d2d1.lib dwrite.lib shcore.lib mmdevapi.lib windowsapp.lib"
+set "LIBS=user32.lib gdi32.lib shell32.lib advapi32.lib ole32.lib d2d1.lib dwrite.lib shcore.lib mmdevapi.lib windowscodecs.lib windowsapp.lib"
 set "SRCS=src\main.cpp src\hud.cpp src\media.cpp src\audio.cpp src\procutil.cpp"
 
 if /i "%~1"=="test" goto :test

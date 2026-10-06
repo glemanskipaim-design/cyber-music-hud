@@ -75,6 +75,41 @@ static void TestLabelsAndFilter() {
   CHECK(ClampText(emoji, 4) == L"aaa");  // não deixa metade do emoji
 }
 
+static void TestTintArt() {
+  // 1 pixel por linha, 3 linhas: preto, branco, cinza médio na linha de scanline.
+  std::vector<uint8_t> px = {0, 0, 0, 255, 255, 255, 255, 255, 128, 128, 128, 255};
+  TintArt(px, 1);
+  CHECK(px[0] < 20 && px[1] < 20 && px[2] < 20);        // preto -> fundo do painel
+  CHECK(px[4] == 255 && px[5] > 240 && px[6] > 150);    // branco -> ciano quase branco
+  CHECK(px[8] > px[9] && px[9] > px[10]);               // meio-tom -> ciano (B > G > R)
+  CHECK(px[3] == 255 && px[7] == 255 && px[11] == 255);  // alfa intacto
+
+  // Scanline: mesma cor fica mais escura na 3ª linha.
+  std::vector<uint8_t> rows = {200, 200, 200, 255, 200, 200, 200, 255, 200, 200, 200, 255};
+  TintArt(rows, 1);
+  CHECK(rows[8] < rows[0] && rows[0] == rows[4]);
+
+  // Pré-multiplicado: pixel meio transparente continua com cor <= alfa.
+  std::vector<uint8_t> half = {128, 128, 128, 128};
+  TintArt(half, 1);
+  CHECK(half[0] <= 128 && half[1] <= 128 && half[2] <= 128 && half[3] == 128);
+
+  const uint8_t png[] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0};
+  const uint8_t jpg[] = {0xFF, 0xD8, 0xFF, 0xE0};
+  const uint8_t heic[] = {0, 0, 0, 0x18, 'f', 't', 'y', 'p', 'h', 'e', 'i', 'c'};
+  CHECK(SniffImage(png, sizeof(png)) == ImageFormat::Png);
+  CHECK(SniffImage(jpg, sizeof(jpg)) == ImageFormat::Jpeg);
+  CHECK(SniffImage(reinterpret_cast<const uint8_t*>("GIF89a"), 6) == ImageFormat::Gif);
+  CHECK(SniffImage(reinterpret_cast<const uint8_t*>("BM"), 2) == ImageFormat::Bmp);
+  CHECK(SniffImage(heic, sizeof(heic)) == ImageFormat::Unknown);  // codec de terceiro: recusado
+  CHECK(SniffImage(png, 4) == ImageFormat::Unknown);               // truncado
+  CHECK(SniffImage(nullptr, 0) == ImageFormat::Unknown);
+
+  std::vector<uint8_t> empty;
+  TintArt(empty, kArtPixels);  // não quebra
+  CHECK(empty.empty());
+}
+
 static void TestChangeDetector() {
   ChangeDetector d(2);
   const std::wstring a = TrackKey(L"Spotify.exe", L"Tank!", L"Seatbelts");
@@ -218,6 +253,7 @@ int main() {
   TestClassifySource();
   TestPlatformFromWindowTitles();
   TestLabelsAndFilter();
+  TestTintArt();
   TestChangeDetector();
   TestTimeline();
   TestDecodeText();

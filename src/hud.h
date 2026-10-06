@@ -54,7 +54,9 @@ class Hud {
   void Render(double ms);
   void DrawFrame(ID2D1RenderTarget* rt, ID2D1SolidColorBrush* brush);
   void DrawHeader(ID2D1RenderTarget* rt, ID2D1SolidColorBrush* brush);
+  void DrawArt(ID2D1RenderTarget* rt, ID2D1SolidColorBrush* brush, double ms);
   void DrawBars(ID2D1RenderTarget* rt, ID2D1SolidColorBrush* brush, double ms);
+  SIZE PixelSize() const;  // tamanho do painel em pixels no DPI atual
   void Present(double ms);
 
   HINSTANCE instance_ = nullptr;
@@ -70,6 +72,7 @@ class Hud {
   Microsoft::WRL::ComPtr<ID2D1DCRenderTarget> target_;
   Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush_;
   Microsoft::WRL::ComPtr<ID2D1PathGeometry> playIcon_;
+  Microsoft::WRL::ComPtr<ID2D1Bitmap> art_;  // capa da faixa atual, criada no render target
 
   HDC memDc_ = nullptr;
   HBITMAP bitmap_ = nullptr;
@@ -84,6 +87,11 @@ class Hud {
   Microsoft::WRL::ComPtr<IDWriteTextLayout> artist_;
   Microsoft::WRL::ComPtr<IDWriteTextLayout> tag_;
   float tagWidth_ = 0;
+
+  // Layout da faixa atual (DIP): com capa o painel alarga e o texto desloca.
+  float width_ = 0;
+  float playX_ = 0;
+  float textX_ = 0;
 
   Timeline timeline_;
   SpectrumAnalyzer spectrum_{36, 48000.0f};

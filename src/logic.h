@@ -8,6 +8,7 @@
 #include <complex>
 #include <cstdint>
 #include <cwctype>
+#include <initializer_list>
 #include <numbers>
 #include <string>
 #include <vector>
@@ -127,6 +128,69 @@ inline std::wstring ClampText(std::wstring s, size_t maxChars = kMaxTextChars) {
   if (cut > 0 && s[cut - 1] >= 0xD800 && s[cut - 1] <= 0xDBFF) --cut;  // high surrogate órfão
   s.resize(cut);
   return s;
+}
+
+// ------------------------------------------------------------ capa
+
+// Paleta da família "cyber" (RGB 0..1): fonte única para o painel (hud.cpp)
+// e para o tingimento da capa.
+struct Rgb {
+  float r, g, b;
+};
+inline constexpr Rgb kPaletteBase = {0.016f, 0.022f, 0.034f};  // fundo do painel
+inline constexpr Rgb kPaletteCyan = {0.0f, 0.898f, 1.0f};      // destaque
+inline constexpr Rgb kPaletteHot = {0.78f, 0.98f, 1.0f};       // ciano quase branco
+
+// Lado (pixels) da capa decodificada: ~2x o tamanho na tela, nítida em 200 %.
+inline constexpr int kArtPixels = 96;
+inline constexpr int kArtStride = kArtPixels * 4;  // BGRA
+inline constexpr size_t kArtBytes = static_cast<size_t>(kArtStride) * kArtPixels;
+// Capa vem de qualquer app — ou de um site, via Media Session do navegador.
+inline constexpr uint64_t kMaxArtFileBytes = 8ull << 20;
+inline constexpr uint32_t kMaxArtSide = 4096;  // contra "bomba" de descompressão
+
+// Formatos aceitos para a capa: só os comuns, decodificados pelos codecs
+// nativos do Windows (nunca um codec de terceiro com dado não confiável).
+enum class ImageFormat { Unknown, Png, Jpeg, Gif, Bmp };
+
+inline ImageFormat SniffImage(const uint8_t* data, size_t size) {
+  auto starts = [&](std::initializer_list<uint8_t> magic) {
+    if (size < magic.size()) return false;
+    return std::equal(magic.begin(), magic.end(), data);
+  };
+  if (starts({0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A})) return ImageFormat::Png;
+  if (starts({0xFF, 0xD8, 0xFF})) return ImageFormat::Jpeg;
+  if (starts({'G', 'I', 'F', '8'})) return ImageFormat::Gif;
+  if (starts({'B', 'M'})) return ImageFormat::Bmp;
+  return ImageFormat::Unknown;
+}
+
+// Capa em monocromático ciano, no idioma do painel: a luminância vira
+// intensidade entre o fundo do painel, o ciano e o ciano quase branco; uma
+// linha em cada três é escurecida (scanline). bgra: BGRA pré-multiplicado
+// (o formato do WIC/Direct2D), `width` pixels por linha.
+inline void TintArt(std::vector<uint8_t>& bgra, int width) {
+  constexpr float kCyanAt = 0.75f;   // luminância que vira ciano puro
+  constexpr float kScanline = 0.72f;
+  auto mix = [](Rgb a, Rgb b, float t) {
+    return Rgb{a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t};
+  };
+  if (width <= 0) return;
+  const size_t pixels = bgra.size() / 4;
+  for (size_t i = 0; i < pixels; ++i) {
+    uint8_t* p = &bgra[i * 4];
+    const float a = p[3] / 255.0f;
+    if (a <= 0.0f) continue;
+    // Desfaz o pré-multiplicado para medir a luminância da cor real.
+    float lum = (0.0722f * p[0] + 0.7152f * p[1] + 0.2126f * p[2]) / (255.0f * a);
+    lum = std::clamp((lum - 0.08f) / 0.84f, 0.0f, 1.0f);  // um pouco de contraste
+    const Rgb c = lum < kCyanAt ? mix(kPaletteBase, kPaletteCyan, lum / kCyanAt)
+                                : mix(kPaletteCyan, kPaletteHot, (lum - kCyanAt) / (1.0f - kCyanAt));
+    const float k = 255.0f * a * ((i / static_cast<size_t>(width)) % 3 == 2 ? kScanline : 1.0f);
+    p[0] = static_cast<uint8_t>(std::lround(c.b * k));
+    p[1] = static_cast<uint8_t>(std::lround(c.g * k));
+    p[2] = static_cast<uint8_t>(std::lround(c.r * k));
+  }
 }
 
 // ------------------------------------------------------------ música nova
